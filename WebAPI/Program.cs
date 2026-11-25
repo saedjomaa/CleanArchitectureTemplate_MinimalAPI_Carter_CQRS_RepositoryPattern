@@ -18,6 +18,10 @@ builder.Services.AddCarter(new DependencyContextAssemblyCatalog(typeof(Program).
 // Binding failures (invalid JSON, missing body, wrong value type) throw BadHttpRequestException in every
 // environment, so GlobalExceptionHandler turns them into a uniform 400 ProblemDetails instead of an empty 400.
 builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
+
+// AddControllers() used to register the authorization services implicitly; without it,
+// app.UseAuthorization() fails at startup unless they are registered explicitly.
+builder.Services.AddAuthorization();
 builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails(options =>
     options.CustomizeProblemDetails = context =>

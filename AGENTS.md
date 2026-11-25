@@ -103,6 +103,7 @@ Application/
 ## Endpoints (Minimal API + Carter)
 - One Carter module per module: `public sealed class [Module]Module : ICarterModule` in `WebAPI/Modules/[Module]Module.cs`. `AddRoutes` creates one route group (`app.MapGroup("api/[module]").WithTags("[Module]")`) and maps every endpoint of the module on it.
 - Modules are discovered by `AddCarter(new DependencyContextAssemblyCatalog(typeof(Program).Assembly))` (WebAPI only) and mapped by `MapCarter()` inside one root group in `Program.cs` that carries `ProblemDetailsLoggingFilter`. No manual registration.
+- Services that `AddControllers()` used to register implicitly must be registered explicitly. In particular `AddAuthorization()` is required while `UseAuthorization()` is in the pipeline; without it the app fails at startup.
 - Each endpoint points to a `private static async Task<IResult>` method of the module (not an inline lambda), named after the use case (`Create`, `Get`, `List`, ...). Inside the module file, alias `using IResult = Microsoft.AspNetCore.Http.IResult;` because `Application.Common.Results` also defines `IResult`.
 - No business logic. The method's parameters are bound by Minimal API: route values and query values by name, the body record, the handler (`ICommandHandler<,>` / `IQueryHandler<,>`, resolved from DI without `[FromServices]`), `HttpContext` and `CancellationToken`. Call the handler once and convert a failed `Result` with `result.ToProblemDetails(context)`.
 - Request body:
