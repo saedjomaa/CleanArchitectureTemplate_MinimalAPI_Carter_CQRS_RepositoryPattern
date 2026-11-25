@@ -69,7 +69,7 @@ All error responses are `ProblemDetails` with `code` and `correlationId`. Every 
 - `GET /api/students/{studentId}/courses?page=&pageSize=` — list the courses a student is enrolled in. Returns 200, or 404 if the student does not exist.
 
 ### External API (JSONPlaceholder)
-A reference example of calling an external API. These endpoints are served by `JsonPlaceholderController` under `/api/jsonplaceholder`, proxy https://jsonplaceholder.typicode.com, and do not touch the database.
+A reference example of calling an external API. These endpoints are served by `JsonPlaceholderModule` (Carter) under `/api/jsonplaceholder`, proxy https://jsonplaceholder.typicode.com, and do not touch the database.
 - `GET /api/jsonplaceholder/users?page=&pageSize=` — list external users (paging is done by the external API with `_page`/`_limit`; `totalCount` comes from its `X-Total-Count` header). Returns 200, 400, 502, or 504.
 - `GET /api/jsonplaceholder/users/{id}` — get one external user. `id` must be greater than 0. Returns 200, 400, 404 (`JsonPlaceholder.UserNotFound`), 502, or 504.
 - `POST /api/jsonplaceholder/posts` — create a post. Body: `{ "userId", "title", "body" }`; `userId` > 0, `title` required (max 200), `body` required (max 2000). Returns 201 with the created post, 400, 502, or 504. JSONPlaceholder does **not** persist it and always returns `id = 101`.
@@ -99,10 +99,10 @@ Applied by migrations on startup:
 
 ## Project Notes
 Technical facts specific to this project. `AGENTS.md` is generic and refers to these through placeholders.
-- Architecture: Clean Architecture + CQRS + Repository Pattern with Unit of Work.
+- Architecture: Clean Architecture + CQRS + Repository Pattern with Unit of Work, exposed through ASP.NET Core Minimal API with Carter 11.0.0 modules (no MVC controllers). Domain, Application and Infrastructure are identical to `CleanArchitectureTemplate_CQRS_RepositoryPattern`.
 - `[Project]` = `School`: `SchoolDbContext`, `SchoolSeed`, `SchoolUnitOfWork`.
 - Database provider: SQLite, connection string `School` = `Data Source=school.db;Foreign Keys=True` (file created next to the WebAPI project). `SchoolUnitOfWork` maps SQLite extended error codes `1555` (primary key) and `2067` (unique) to `PersistenceErrors.DuplicateKey`.
-- Solution file: `CleanArchitectureTemplate_CQRS_RepositoryPattern.slnx`.
+- Solution file: `CleanArchitectureTemplate_MinimalAPI_Carter_CQRS_RepositoryPattern.slnx`.
 - External service `[Service]` = `JsonPlaceholder`: `IJsonPlaceholderClient`, `JsonPlaceholderClient`, settings `ExternalServices:JsonPlaceholder:BaseUrl` = `https://jsonplaceholder.typicode.com/`. Shared timeout for all external services: `ExternalServices:TimeoutSeconds` = 10.
 - Known exception: migration `20261120061000_InitialSchool` was written by hand and has no `.Designer.cs` file. Do not copy that style; create new migrations with the EF Core CLI.
 - EF Core sensitive data logging is **enabled in all environments** (`Database:EnableSensitiveDataLogging = true` in `appsettings.json`), by the project owner's decision. Log files therefore contain SQL parameter values such as student names. To disable it in one environment, set it to `false` in `appsettings.{Environment}.json`.

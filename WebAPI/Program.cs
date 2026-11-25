@@ -1,4 +1,5 @@
 using Application;
+using Carter;
 using Infrastructure;
 using Scalar.AspNetCore;
 using Serilog;
@@ -11,7 +12,12 @@ builder.Services.AddSerilog((services, logging) => logging
     .ReadFrom.Services(services)
     .Enrich.FromLogContext());
 
-builder.Services.AddControllers(options => options.Filters.Add<ProblemDetailsLoggingFilter>());
+// Carter finds every ICarterModule in this assembly (WebAPI only; Application validators stay with the decorators).
+builder.Services.AddCarter(new DependencyContextAssemblyCatalog(typeof(Program).Assembly));
+
+// Binding failures (invalid JSON, missing body, wrong value type) throw BadHttpRequestException in every
+// environment, so GlobalExceptionHandler turns them into a uniform 400 ProblemDetails instead of an empty 400.
+builder.Services.Configure<RouteHandlerOptions>(options => options.ThrowOnBadRequest = true);
 builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails(options =>
     options.CustomizeProblemDetails = context =>
@@ -40,6 +46,10 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 
 app.MapHealthChecks("/health");
-app.MapControllers();
+
+// All Carter modules go through one group so the ProblemDetails logging filter applies to every endpoint.
+app.MapGroup(string.Empty)
+    .AddEndpointFilter<ProblemDetailsLoggingFilter>()
+    .MapCarter();
 
 app.Run();

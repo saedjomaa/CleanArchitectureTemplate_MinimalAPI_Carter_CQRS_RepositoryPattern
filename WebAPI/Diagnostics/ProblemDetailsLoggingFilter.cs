@@ -1,25 +1,28 @@
 using System.Text.Json;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.Extensions.Options;
 
 namespace WebAPI.Diagnostics;
 
 /// <summary>
-/// Logs the exact ProblemDetails JSON returned to the client whenever a controller action fails
-/// (expected errors from <c>ToProblemDetails</c>, validation errors, model binding errors).
-/// Successful responses are not logged. Unexpected exceptions (500) are logged by <see cref="GlobalExceptionHandler"/>.
+/// Minimal API endpoint filter (the MVC result filter does not run for minimal endpoints).
+/// Applied to every Carter module in <c>Program.cs</c>. Logs the exact ProblemDetails JSON returned
+/// to the client whenever an endpoint fails. Successful responses are not logged.
+/// Unexpected exceptions (500) and binding failures are logged by <see cref="GlobalExceptionHandler"/>.
 /// </summary>
 internal sealed class ProblemDetailsLoggingFilter(
     ILogger<ProblemDetailsLoggingFilter> logger,
-    IOptions<JsonOptions> jsonOptions) : IAsyncAlwaysRunResultFilter
+    IOptions<Microsoft.AspNetCore.Http.Json.JsonOptions> jsonOptions) : IEndpointFilter
 {
-    public Task OnResultExecutionAsync(ResultExecutingContext context, ResultExecutionDelegate next)
+    public async ValueTask<object?> InvokeAsync(EndpointFilterInvocationContext context, EndpointFilterDelegate next)
     {
-        if (context.Result is ObjectResult { Value: ProblemDetails problem } result)
+        var result = await next(context);
+
+        if (result is ProblemHttpResult problemResult)
         {
-            var statusCode = result.StatusCode ?? problem.Status ?? StatusCodes.Status500InternalServerError;
-            var json = JsonSerializer.Serialize(problem, problem.GetType(), jsonOptions.Value.JsonSerializerOptions);
+            var problem = problemResult.ProblemDetails;
+            var statusCode = problemResult.StatusCode;
+            var json = JsonSerializer.Serialize(problem, problem.GetType(), jsonOptions.Value.SerializerOptions);
 
             logger.Log(
                 statusCode >= StatusCodes.Status500InternalServerError ? LogLevel.Error : LogLevel.Warning,
@@ -28,6 +31,6 @@ internal sealed class ProblemDetailsLoggingFilter(
                 json);
         }
 
-        return next();
+        return result;
     }
 }

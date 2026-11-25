@@ -5,16 +5,16 @@ Business rules, the endpoint list and project-specific technical facts (database
 Placeholders used below: `[Project]` (project name prefix, e.g. for the `DbContext`), `[Module]` (feature folder, plural), `[Entity]` (domain entity), `[UseCaseName]`, `[Action]`, `[Property]`, `[Reason]`.
 
 ## Stack
-- ASP.NET Core Web API with **Controllers**. The target framework, nullable and implicit usings are set once in `Directory.Build.props`.
+- ASP.NET Core **Minimal API** organized in **Carter** modules. **No MVC controllers** (no `AddControllers`, `ControllerBase` or MVC filters). The target framework, nullable and implicit usings are set once in `Directory.Build.props`.
 - Clean Architecture + CQRS + Repository Pattern with Unit of Work
 - **No MediatR/Mediator. No AutoMapper** (direct handler injection, manual mapping only)
-- FluentValidation, EF Core, Scrutor, Serilog
+- Carter, FluentValidation, EF Core, Scrutor, Serilog
 
 ## Layers (dependencies point inward only)
 - `Domain`: entities, enums, domain exceptions. References nothing.
 - `Application`: commands, queries, handlers, validators, responses, results, repository interfaces and `IUnitOfWork`. References Domain only. **Application has no EF Core package reference**; keep it that way.
 - `Infrastructure`: EF Core, `DbContext`, repository and Unit of Work implementations, migrations, external services. Implements Application interfaces.
-- `WebAPI`: controllers, `Program.cs`. Composition root.
+- `WebAPI`: Carter modules (`WebAPI/Modules`), endpoint filters and diagnostics (`WebAPI/Diagnostics`), `Program.cs`. Composition root. Only this layer differs from the Controllers version of this architecture; Domain, Application and Infrastructure are identical.
 
 Handlers depend on repository interfaces and `IUnitOfWork`, never on `DbContext` or other Infrastructure types.
 
@@ -100,19 +100,22 @@ Application/
 - Error codes use the form `[Module].[Reason]` with a plural module name, e.g. `[Module].NotFound`.
 - `ErrorType` maps to HTTP status in `ResultExtensions.ToProblemDetails`: `Validation` → 400, `NotFound` → 404, `Conflict` → 409, `BadGateway` → 502, `GatewayTimeout` → 504. The error code is returned in the `code` extension of the `ProblemDetails`.
 
-## Controllers
-- No business logic. Inject handlers per action with `[FromServices]`, convert a failed `Result` with `result.ToProblemDetails(HttpContext)`.
+## Endpoints (Minimal API + Carter)
+- One Carter module per module: `public sealed class [Module]Module : ICarterModule` in `WebAPI/Modules/[Module]Module.cs`. `AddRoutes` creates one route group (`app.MapGroup("api/[module]").WithTags("[Module]")`) and maps every endpoint of the module on it.
+- Modules are discovered by `AddCarter(new DependencyContextAssemblyCatalog(typeof(Program).Assembly))` (WebAPI only) and mapped by `MapCarter()` inside one root group in `Program.cs` that carries `ProblemDetailsLoggingFilter`. No manual registration.
+- Each endpoint points to a `private static async Task<IResult>` method of the module (not an inline lambda), named after the use case (`Create`, `Get`, `List`, ...). Inside the module file, alias `using IResult = Microsoft.AspNetCore.Http.IResult;` because `Application.Common.Results` also defines `IResult`.
+- No business logic. The method's parameters are bound by Minimal API: route values and query values by name, the body record, the handler (`ICommandHandler<,>` / `IQueryHandler<,>`, resolved from DI without `[FromServices]`), `HttpContext` and `CancellationToken`. Call the handler once and convert a failed `Result` with `result.ToProblemDetails(context)`.
 - Request body:
   - When the body maps 1:1 to the command, bind the command record directly (e.g. `Create[Entity]Command`).
-  - When the command also needs route values, define a `[Action]Request` record at the bottom of the controller file and build the command in the action.
-- Responses:
-  - Create command returning an ID → `201 Created` via `CreatedAtAction(nameof(Get), new { id }, id)`.
-  - Command without payload → `204 No Content`.
-  - Query → `200 OK` with the response.
-- Every action has `[EndpointSummary]` and a `[ProducesResponseType]` for the success status and for every error status it can return (`ValidationProblemDetails` for 400, `ProblemDetails` for 404/409).
-- List endpoints take `page` and `pageSize` from the query string with defaults from `Pagination`.
+  - When the command also needs route values, define a `[Action]Request` record at the bottom of the module file and build the command in the method.
+- Responses (`TypedResults`):
+  - Create command returning an ID → `TypedResults.CreatedAtRoute(id, "Get[Entity]", new { id })`. The matching GET endpoint is named with `.WithName("Get[Entity]")`; route names are unique across the API.
+  - Command without payload → `TypedResults.NoContent()`.
+  - Query → `TypedResults.Ok(value)`.
+- Every endpoint declares its OpenAPI metadata: `.WithSummary(...)`, `.Produces<T>(status)` for the success response, `.ProducesValidationProblem()` for 400, and `.ProducesProblem(status)` for every other error status it can return (404, 409, 502, 504).
+- List endpoints take `int page = Pagination.DefaultPage` and `int pageSize = Pagination.DefaultPageSize` as method parameters (bound from the query string).
 - Keep `WebAPI/WebAPI.http` in sync with the endpoints: add an example for every new endpoint and remove examples for deleted ones.
-- API documentation, Development only: `MapOpenApi()` serves the OpenAPI document at `/openapi/v1.json`, and `MapScalarApiReference()` (package `Scalar.AspNetCore`) serves an interactive UI at `/scalar` to read and call the endpoints. Both are generated from the controllers, so `[EndpointSummary]` and `[ProducesResponseType]` are what the UI shows. Do not expose them outside Development.
+- API documentation, Development only: `MapOpenApi()` serves the OpenAPI document at `/openapi/v1.json`, and `MapScalarApiReference()` (package `Scalar.AspNetCore`) serves an interactive UI at `/scalar` to read and call the endpoints. Both are generated from the endpoint metadata above. Do not expose them outside Development.
 
 ## External Services
 Placeholder: `[Service]` (external API name, e.g. the provider's product name).
@@ -137,15 +140,17 @@ Placeholder: `[Service]` (external API name, e.g. the provider's product name).
 - External list endpoints still return `PagedResult<T>`: use the external API's paging parameters and total-count header when it has them; do not fetch everything and page in memory.
 - No automatic retries by default. Never retry non-idempotent requests (POST) automatically.
 - External services are not added to `/health`: their outage does not make this application unhealthy.
-- One controller per external service: `[Service]Controller` with the route prefix `api/[service]` (lowercase service name), holding all of that service's endpoints (e.g. `api/[service]/[resource]`). Do not split a service's endpoints across controllers per resource.
-- A create call to an external API with no local read endpoint returns `201` via `Created((string?)null, value)`.
+- One Carter module per external service: `[Service]Module` with the route group `api/[service]` (lowercase service name), holding all of that service's endpoints (e.g. `api/[service]/[resource]`). Do not split a service's endpoints across modules per resource.
+- A create call to an external API with no local read endpoint returns `201` via `TypedResults.Created((string?)null, value)`.
 
 ## Cross-Cutting Rules
 
 **Global error handling**
 - Unexpected exceptions are handled by a single `IExceptionHandler` registered in WebAPI that returns a uniform `ProblemDetails`.
 - Never return stack traces or exception messages to the client. Log the exception server-side.
-- Every failed response is logged with the exact `ProblemDetails` JSON sent to the client (`Responded {StatusCode} with {ProblemDetails}`): `ProblemDetailsLoggingFilter`, a global result filter, logs it for controller results (Warning for 4xx, Error for 5xx), and `GlobalExceptionHandler` logs it for unexpected exceptions. Successful responses are not logged this way.
+- Every failed response is logged with the exact `ProblemDetails` JSON sent to the client (`Responded {StatusCode} with {ProblemDetails}`): `ProblemDetailsLoggingFilter`, an `IEndpointFilter` on the root group of all Carter modules, logs it for every `ProblemHttpResult` an endpoint returns (Warning for 4xx, Error for 5xx), and `GlobalExceptionHandler` logs it for exceptions. Successful responses are not logged this way.
+- Every ProblemDetails is built by `ProblemDetailsBuilder` (`WebAPI/Diagnostics`), which fills `type`, `title`, `status`, `detail`, `traceId` and `correlationId` before the response is written (Minimal API has no MVC `ProblemDetailsFactory`). `ToProblemDetails` returns `TypedResults.Problem(problem)`.
+- Request binding failures (invalid JSON, missing body, a value of the wrong type): `RouteHandlerOptions.ThrowOnBadRequest` is enabled, so Minimal API throws `BadHttpRequestException` in every environment and `GlobalExceptionHandler` returns 400 with code `Request.Invalid` (no field-level `errors`). Field-level validation stays in the validators and returns `Validation.Failed`.
 
 **Transactions**
 - One `IUnitOfWork.SaveChangesAsync` per command is the default and is already atomic.
@@ -187,6 +192,6 @@ Placeholder: `[Service]` (external API name, e.g. the provider's product name).
 4. Add or reuse repository methods (see Data Access). A new repository is registered automatically when it is named `[Entity]Repository` and implements `I[Entity]Repository`.
 5. Add errors to `[Module]Errors.cs` if needed.
 6. If the model changed, add a migration with the EF Core CLI (see Migrations).
-7. Add the controller action following the Controllers section, and an example request in `WebAPI.http`.
+7. Add the endpoint to the module following the Endpoints section, and an example request in `WebAPI.http`.
 8. Add the endpoint to `Requirements.md`.
 9. Run `dotnet build` on the solution file at the repository root.
